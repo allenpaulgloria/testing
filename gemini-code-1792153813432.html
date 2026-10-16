@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Flappy Poop 💩🚽</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    body {
+      background: #1e272e;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      overflow: hidden;
+      touch-action: manipulation;
+    }
+
+    #game-container {
+      position: relative;
+      width: 400px;
+      height: 600px;
+      max-width: 100vw;
+      max-height: 100vh;
+      box-shadow: 0 12px 35px rgba(0, 0, 0, 0.5);
+      border-radius: 16px;
+      overflow: hidden;
+      border: 4px solid #ffffff;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+  </style>
+</head>
+<body>
+
+<div id="game-container">
+  <canvas id="gameCanvas" width="400" height="600"></canvas>
+</div>
+
+<script>
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+
+  // Game State
+  let gameState = 'START'; // START, PLAYING, GAMEOVER
+  let score = 0;
+  let highScore = localStorage.getItem('flappyPoopHighScore') || 0;
+  let frames = 0;
+
+  // Player (Poop Emoji)
+  const poop = {
+    x: 90,
+    y: 260,
+    radius: 18,
+    velocity: 0,
+    gravity: 0.42,
+    jump: -7.6,
+    rotation: 0,
+
+    reset() {
+      this.y = 260;
+      this.velocity = 0;
+      this.rotation = 0;
+    },
+
+    flap() {
+      this.velocity = this.jump;
+    },
+
+    update() {
+      this.velocity += this.gravity;
+      this.y += this.velocity;
+
+      // Tilt based on falling/rising speed
+      this.rotation = Math.min(Math.PI / 3, Math.max(-Math.PI / 4, this.velocity * 0.08));
+
+      // Floor collision (drain floor starts at y = 550)
+      if (this.y + this.radius >= canvas.height - 50) {
+        this.y = canvas.height - 50 - this.radius;
+        triggerGameOver();
+      }
+
+      // Ceiling limit
+      if (this.y - this.radius <= 0) {
+        this.y = this.radius;
+        this.velocity = 0;
+      }
+    },
+
+    draw() {
+      ctx.save();
+      ctx.translate(this.x, this.y);
+      ctx.rotate(this.rotation);
+      ctx.font = '42px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('💩', 0, 3);
+      ctx.restore();
+    }
+  };
+
+  // Obstacles (Toilets)
+  const toilets = [];
+  const toiletWidth = 66;
+  const toiletGap = 145;
+  const toiletSpeed = 2.6;
+  const spawnInterval = 95; // frames between new toilets
+
+  // Floating decorative bubbles
+  const bubbles = Array.from({ length: 12 }, () => ({
+    x: Math.random() * canvas.width,
+    y: Math.random() * (canvas.height - 60),
+    r: 4 + Math.random() * 10,
+    speed: 0.4 + Math.random() * 0.8
+  }));
+
+  function spawnToilet() {
+    const minTop = 75;
+    const maxTop = canvas.height - 50 - toiletGap - 95;
+    const topHeight = Math.floor(Math.random() * (maxTop - minTop + 1)) + minTop;
+
+    toilets.push({
+      x: canvas.width,
+      topHeight: topHeight,
+      bottomY: topHeight + toiletGap,
+      passed: false
+    });
+  }
+
+  // Draws bathroom tile background & floor drain
+  function drawBackground() {
+    ctx.fillStyle = '#dff9fb';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Bathroom wall tile grid
+    ctx.strokeStyle = '#c7ecee';
+    ctx.lineWidth = 1.5;
+    const tileSize = 40;
+    const offset = (frames * 0.5) % tileSize;
+
+    for (let x = -offset; x < canvas.width; x += tileSize) {
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, canvas.height - 50);
+      ctx.stroke();
+    }
+    for (let y = 0; y < canvas.height - 50; y += tileSize) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(canvas.width, y);
+      ctx.stroke();
+    }
+
+    // Floating soap bubbles
+    ctx.strokeStyle = 'rgba(126, 214, 223, 0.65)';
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+    bubbles.forEach(b => {
+      if (gameState === 'PLAYING') {
+        b.y -= b.speed;
+        if (b.y + b.r < 0) {
+          b.y = canvas.height - 55;
+          b.x = Math.random() * canvas.width;
+        }
+      }
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    });
+  }
+
+  function drawFloor() {
+    const floorY = canvas.height - 50;
+    // Checkered bathroom floor
+    const tileW = 25;
+    const scrollOffset = gameState === 'PLAYING' ? (frames * toiletSpeed) % (tileW * 2) : 0;
+
+    ctx.fillStyle = '#535c68';
+    ctx.fillRect(0, floorY, canvas.width, 50);
+
+    for (let x = -scrollOffset; x < canvas.width; x += tileW) {
+      const isEven = Math.round((x + scrollOffset) / tileW) % 2 === 0;
+      ctx.fillStyle = isEven ? '#95afc0' : '#535c68';
+      ctx.fillRect(x, floorY, tileW, 14);
+    }
+
+    ctx.strokeStyle = '#2f3640';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(0, floorY);
+    ctx.lineTo(canvas.width, floorY);
+    ctx.stroke();
+  }
+
+  // Draws a single porcelain toilet obstacle (either upright on bottom or upside-down from ceiling)
+  function drawPorcelainToilet(x, y, width, height, isTop) {
+    ctx.save();
+    ctx.strokeStyle = '#7f8fa6';
+    ctx.lineWidth = 2.5;
+
+    const rimH = 16;
+    const bowlH = 26;
+
+    if (!isTop) {
+      // BOTTOM TOILET (Seat faces UP toward the gap)
+      // 1. Porcelain pedestal base/pipe extending down
+      ctx.fillStyle = '#f5f6fa';
+      ctx.fillRect(x + 8, y + rimH, width - 16, height - rimH);
+      ctx.strokeRect(x + 8, y + rimH, width - 16, height - rimH);
+
+      // 2. Curved Toilet Bowl
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.roundRect(x + 2, y + 8, width - 4, bowlH, [0, 0, 20, 20]);
+      ctx.fill();
+      ctx.stroke();
+
+      // 3. Back Water Tank (slightly offset on the right side of the bowl)
+      ctx.fillStyle = '#f5f6fa';
+      ctx.fillRect(x + width - 18, y + 14, 16, Math.min(42, height - 14));
+      ctx.strokeRect(x + width - 18, y + 14, 16, Math.min(42, height - 14));
+
+      // Chrome Flush Handle
+      ctx.fillStyle = '#fbc531';
+      ctx.fillRect(x + width - 22, y + 22, 8, 5);
+
+      // 4. Toilet Seat Rim (at the very top edge)
+      ctx.fillStyle = '#dcdde1';
+      ctx.beginPath();
+      ctx.roundRect(x - 4, y, width + 8, rimH, 8);
+      ctx.fill();
+      ctx.stroke();
+
+      // Blue toilet water gleam inside rim
+      ctx.fillStyle = '#70a1ff';
+      ctx.fillRect(x + 6, y + 3, width - 12, 5);
+    } else {
+      // TOP TOILET (Hanging upside-down from ceiling; seat faces DOWN toward the gap)
+      const bottomEdge = y + height;
+
+      // 1. Porcelain pedestal extending up to ceiling
+      ctx.fillStyle = '#f5f6fa';
+      ctx.fillRect(x + 8, y, width - 16, height - rimH);
+      ctx.strokeRect(x + 8, y, width - 16, height - rimH);
+
+      // 2. Curved Toilet Bowl
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.roundRect(x + 2, bottomEdge - rimH - bowlH + 8, width - 4, bowlH, [20, 20, 0, 0]);
+      ctx.fill();
+      ctx.stroke();
+
+      // 3. Back Water Tank
+      const tankH = Math.min(42, height - 14);
+      ctx.fillStyle = '#f5f6fa';
+      ctx.fillRect(x + width - 18, bottomEdge - 14 - tankH, 16, tankH);
+      ctx.strokeRect(x + width - 18, bottomEdge - 14 - tankH, 16, tankH);
+
+      // Chrome Flush Handle
+      ctx.fillStyle = '#fbc531';
+      ctx.fillRect(x + width - 22, bottomEdge - 27, 8, 5);
+
+      // 4. Toilet Seat Rim (at the bottom edge facing the player)
+      ctx.fillStyle = '#dcdde1';
+      ctx.beginPath();
+      ctx.roundRect(x - 4, bottomEdge - rimH, width + 8, rimH, 8);
+      ctx.fill();
+      ctx.stroke();
+
+      // Blue toilet water gleam
+      ctx.fillStyle = '#70a1ff';
+      ctx.fillRect(x + 6, bottomEdge - 8, width - 12, 5);
+    }
+
+    ctx.restore();
+  }
+
+  function updateAndDrawToilets() {
+    if (gameState === 'PLAYING' && frames % spawnInterval === 0) {
+      spawnToilet();
+    }
+
+    for (let i = toilets.length - 1; i >= 0; i--) {
+      const t = toilets[i];
+
+      if (gameState === 'PLAYING') {
+        t.x -= toiletSpeed;
+
+        // Collision Detection (AABB vs Circle approximation)
+        const hitX = poop.x + poop.radius > t.x - 2 && poop.x - poop.radius < t.x + toiletWidth + 2;
+        const hitTop = poop.y - poop.radius < t.topHeight;
+        const hitBottom = poop.y + poop.radius > t.bottomY;
+
+        if (hitX && (hitTop || hitBottom)) {
+          triggerGameOver();
+        }
+
+        // Score update
+        if (!t.passed && poop.x > t.x + toiletWidth) {
+          t.passed = true;
+          score++;
+          if (score > highScore) {
+            highScore = score;
+            localStorage.setItem('flappyPoopHighScore', highScore);
+          }
+        }
+      }
+
+      // Draw Top & Bottom Toilets
+      drawPorcelainToilet(t.x, 0, toiletWidth, t.topHeight, true);
+      const bottomHeight = canvas.height - 50 - t.bottomY;
+      drawPorcelainToilet(t.x, t.bottomY, toiletWidth, bottomHeight, false);
+
+      // Remove off-screen toilets
+      if (t.x + toiletWidth + 10 < 0) {
+        toilets.splice(i, 1);
+      }
+    }
+  }
+
+  function triggerGameOver() {
+    gameState = 'GAMEOVER';
+  }
+
+  function resetGame() {
+    poop.reset();
+    toilets.length = 0;
+    score = 0;
+    frames = 0;
+    gameState = 'PLAYING';
+    poop.flap();
+  }
+
+  function drawUI() {
+    ctx.textAlign = 'center';
+
+    if (gameState === 'PLAYING') {
+      ctx.font = 'bold 44px sans-serif';
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeStyle = '#2f3640';
+      ctx.lineWidth = 5;
+      ctx.strokeText(score, canvas.width / 2, 65);
+      ctx.fillText(score, canvas.width / 2, 65);
+    }
+
+    if (gameState === 'START') {
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeStyle = '#2f3640';
+      ctx.lineWidth = 6;
+      ctx.font = 'bold 40px sans-serif';
+      ctx.strokeText('FLAPPY POOP', canvas.width / 2, 190);
+      ctx.fillText('FLAPPY POOP', canvas.width / 2, 190);
+
+      ctx.font = '20px sans-serif';
+      ctx.fillStyle = '#f5f6fa';
+      ctx.fillText('Dodge the Porcelain Toilets! 🚽', canvas.width / 2, 235);
+
+      ctx.font = 'bold 22px sans-serif';
+      ctx.fillStyle = '#ffbe76';
+      ctx.fillText('Tap, Click, or Press Space', canvas.width / 2, 360);
+    }
+
+    if (gameState === 'GAMEOVER') {
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Score Card
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeStyle = '#2f3640';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.roundRect(65, 160, 270, 230, 16);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = '#eb4d4b';
+      ctx.font = 'bold 34px sans-serif';
+      ctx.fillText('FLUSHED! 🚽', canvas.width / 2, 212);
+
+      ctx.fillStyle = '#2f3640';
+      ctx.font = 'bold 22px sans-serif';
+      ctx.fillText(`Score: ${score}`, canvas.width / 2, 265);
+      ctx.fillStyle = '#f0932b';
+      ctx.fillText(`Best: ${highScore}`, canvas.width / 2, 305);
+
+      ctx.fillStyle = '#22a6b3';
+      ctx.font = 'bold 18px sans-serif';
+      ctx.fillText('Tap or Press Space to Retry', canvas.width / 2, 358);
+    }
+  }
+
+  // Input Handling (Touch, Mouse, and Keyboard)
+  function handleAction(e) {
+    if (e.type === 'keydown' && e.code !== 'Space' && e.code !== 'ArrowUp') return;
+    if (e.cancelable) e.preventDefault();
+
+    if (gameState === 'START' || gameState === 'GAMEOVER') {
+      resetGame();
+    } else if (gameState === 'PLAYING') {
+      poop.flap();
+    }
+  }
+
+  window.addEventListener('keydown', handleAction);
+  canvas.addEventListener('pointerdown', handleAction);
+
+  // Main Game Loop
+  function loop() {
+    drawBackground();
+
+    if (gameState === 'PLAYING') {
+      frames++;
+      poop.update();
+    } else if (gameState === 'START') {
+      // Gentle hover animation on start screen
+      frames++;
+      poop.y = 265 + Math.sin(frames * 0.08) * 8;
+    }
+
+    updateAndDrawToilets();
+    drawFloor();
+    poop.draw();
+    drawUI();
+
+    requestAnimationFrame(loop);
+  }
+
+  loop();
+</script>
+
+</body>
+</html>
